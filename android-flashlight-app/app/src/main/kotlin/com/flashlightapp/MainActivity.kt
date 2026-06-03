@@ -1,7 +1,6 @@
 package com.flashlightapp
 
 import android.Manifest
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -22,11 +21,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.FlashOff
+import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.PowerOff
-import androidx.compose.material.icons.filled.FlashOn
-import androidx.compose.material.icons.filled.FlashOff
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -49,7 +49,6 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: MainViewModel by viewModels()
 
-    // Permissions we need
     private val requiredPermissions: Array<String>
         get() = buildList {
             add(Manifest.permission.RECORD_AUDIO)
@@ -59,39 +58,65 @@ class MainActivity : ComponentActivity() {
             }
         }.toTypedArray()
 
+    private fun allPermissionsGranted(): Boolean = requiredPermissions.all {
+        ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-
         setContent {
             FlashlightAppTheme {
-                val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+                val uiState  by viewModel.uiState.collectAsStateWithLifecycle()
+                val settings by viewModel.settings.collectAsStateWithLifecycle()
                 val context = LocalContext.current
 
-                // If the service shut itself down, close the Activity too
+                var showSettings by remember { mutableStateOf(false) }
+                var isRecording  by remember { mutableStateOf(false) }
+
                 LaunchedEffect(uiState.isShutdown) {
                     if (uiState.isShutdown) finish()
                 }
 
-                FlashlightScreen(
-                    uiState = uiState,
-                    onSetMode = { viewModel.setListeningMode(it) },
-                    onToggleFlashlight = { viewModel.toggleFlashlight() },
-                    onShutdown = { viewModel.shutdown(context) }
-                )
+                if (showSettings) {
+                    SettingsScreen(
+                        settings      = settings,
+                        isRecording   = isRecording,
+                        onSave        = { viewModel.saveSettings(it) },
+                        onRecordPhrase = { callback ->
+                            isRecording = true
+                            viewModel.recordReferencePhrase(context) { result ->
+                                isRecording = false
+                                callback(result)
+                            }
+                        },
+                        onBack = { showSettings = false }
+                    )
+                } else {
+                    FlashlightScreen(
+                        uiState            = uiState,
+                        onSetMode          = { viewModel.setListeningMode(it) },
+                        onToggleFlashlight = { viewModel.toggleFlashlight() },
+                        onShutdown         = { viewModel.shutdown(context) },
+                        onOpenSettings     = { showSettings = true },
+                        onPermissionsGranted = { viewModel.bindToService(this@MainActivity) }
+                    )
+                }
             }
         }
     }
 
     override fun onStart() {
         super.onStart()
-        // Bind to (and start) the service on every onStart so rotating the
-        // screen re-attaches without killing background work.
-        viewModel.bindToService(this)
+        // Only start the service when permissions are already granted.
+        // If they are not yet granted, the PermissionScreen's onPermissionsGranted
+        // callback will trigger binding once the user approves.
+        if (allPermissionsGranted()) {
+            viewModel.bindToService(this)
+        }
     }
 
     override fun onStop() {
-        // Unbind but leave the service alive so it keeps listening in the bg.
         viewModel.unbindFromService(this)
         super.onStop()
     }
@@ -106,7 +131,9 @@ fun FlashlightScreen(
     uiState: FlashlightService.UiState,
     onSetMode: (ListeningMode) -> Unit,
     onToggleFlashlight: () -> Unit,
-    onShutdown: () -> Unit
+    onShutdown: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onPermissionsGranted: () -> Unit
 ) {
     val context = LocalContext.current
 
@@ -127,14 +154,18 @@ fun FlashlightScreen(
     if (showPermissionScreen) {
         PermissionScreen(
             permissions = permissions,
-            onAllGranted = { showPermissionScreen = false }
+            onAllGranted = {
+                showPermissionScreen = false
+                onPermissionsGranted()
+            }
         )
     } else {
         MainContent(
-            uiState = uiState,
-            onSetMode = onSetMode,
+            uiState            = uiState,
+            onSetMode          = onSetMode,
             onToggleFlashlight = onToggleFlashlight,
-            onShutdown = onShutdown
+            onShutdown         = onShutdown,
+            onOpenSettings     = onOpenSettings
         )
     }
 }
@@ -197,9 +228,7 @@ fun PermissionScreen(
                     textAlign = TextAlign.Center
                 )
                 Spacer(Modifier.height(4.dp))
-                denied.forEach { perm ->
-                    PermissionRow(permission = perm)
-                }
+                denied.forEach { perm -> PermissionRow(permission = perm) }
                 Spacer(Modifier.height(8.dp))
                 Button(
                     onClick = { launcher.launch(denied.toTypedArray()) },
@@ -221,8 +250,8 @@ fun PermissionScreen(
 @Composable
 fun PermissionRow(permission: String) {
     val label = when {
-        permission.contains("RECORD_AUDIO")     -> "Microphone — for voice commands"
-        permission.contains("CAMERA")           -> "Camera — for flashlight control"
+        permission.contains("RECORD_AUDIO")       -> "Microphone — for voice commands"
+        permission.contains("CAMERA")             -> "Camera — for flashlight control"
         permission.contains("POST_NOTIFICATIONS") -> "Notifications — for background service"
         else -> permission.substringAfterLast(".")
     }
@@ -235,12 +264,7 @@ fun PermissionRow(permission: String) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Box(
-            Modifier
-                .size(8.dp)
-                .clip(CircleShape)
-                .background(YellowTorch)
-        )
+        Box(Modifier.size(8.dp).clip(CircleShape).background(YellowTorch))
         Text(text = label, color = Color.White, style = MaterialTheme.typography.bodyLarge)
     }
 }
@@ -254,7 +278,8 @@ fun MainContent(
     uiState: FlashlightService.UiState,
     onSetMode: (ListeningMode) -> Unit,
     onToggleFlashlight: () -> Unit,
-    onShutdown: () -> Unit
+    onShutdown: () -> Unit,
+    onOpenSettings: () -> Unit
 ) {
     val bgColor by animateColorAsState(
         targetValue = if (uiState.flashlightOn) Color(0xFF2C2100) else DeepCharcoal,
@@ -265,11 +290,7 @@ fun MainContent(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(bgColor, SurfaceCharcoal)
-                )
-            )
+            .background(Brush.verticalGradient(colors = listOf(bgColor, SurfaceCharcoal)))
     ) {
         Column(
             modifier = Modifier
@@ -279,25 +300,10 @@ fun MainContent(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceBetween
         ) {
-            // Title bar
-            AppHeader()
-
-            // Flashlight orb
-            FlashlightOrb(
-                isOn = uiState.flashlightOn,
-                onClick = onToggleFlashlight
-            )
-
-            // Status label
+            AppHeader(onOpenSettings = onOpenSettings)
+            FlashlightOrb(isOn = uiState.flashlightOn, onClick = onToggleFlashlight)
             StatusLabel(uiState = uiState)
-
-            // Mode selector
-            ModeSelector(
-                currentMode = uiState.mode,
-                onSetMode = onSetMode
-            )
-
-            // Shutdown button
+            ModeSelector(currentMode = uiState.mode, onSetMode = onSetMode)
             ShutdownButton(onClick = onShutdown)
         }
     }
@@ -308,7 +314,7 @@ fun MainContent(
 // =============================================================================
 
 @Composable
-private fun AppHeader() {
+private fun AppHeader(onOpenSettings: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -325,8 +331,16 @@ private fun AppHeader() {
             text = "Flashlight Voice",
             style = MaterialTheme.typography.titleLarge,
             color = Color.White,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.weight(1f)
         )
+        IconButton(onClick = onOpenSettings) {
+            Icon(
+                imageVector = Icons.Default.Settings,
+                contentDescription = "Settings",
+                tint = Color.White.copy(alpha = 0.6f)
+            )
+        }
     }
 }
 
@@ -359,11 +373,7 @@ private fun FlashlightOrb(isOn: Boolean, onClick: () -> Unit) {
             .scale(scale)
             .size(200.dp)
             .clip(CircleShape)
-            .background(
-                Brush.radialGradient(
-                    colors = listOf(glowColor, Color.Transparent)
-                )
-            )
+            .background(Brush.radialGradient(colors = listOf(glowColor, Color.Transparent)))
             .border(
                 width = 2.dp,
                 color = if (isOn) YellowTorch else Color.White.copy(alpha = 0.12f),
@@ -372,10 +382,7 @@ private fun FlashlightOrb(isOn: Boolean, onClick: () -> Unit) {
     ) {
         IconButton(
             onClick = onClick,
-            modifier = Modifier
-                .size(160.dp)
-                .clip(CircleShape)
-                .background(orbColor)
+            modifier = Modifier.size(160.dp).clip(CircleShape).background(orbColor)
         ) {
             Icon(
                 imageVector = if (isOn) Icons.Default.FlashOn else Icons.Default.FlashOff,
@@ -391,7 +398,7 @@ private fun FlashlightOrb(isOn: Boolean, onClick: () -> Unit) {
 private fun StatusLabel(uiState: FlashlightService.UiState) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         val (label, color) = when {
-            uiState.flashlightOn -> "FLASHLIGHT ON" to OnGreen
+            uiState.flashlightOn -> "FLASHLIGHT ON"  to OnGreen
             else                 -> "FLASHLIGHT OFF" to OffRed
         }
         Text(
@@ -404,9 +411,9 @@ private fun StatusLabel(uiState: FlashlightService.UiState) {
         Spacer(Modifier.height(6.dp))
 
         val (micLabel, micColor) = when (uiState.mode) {
-            ListeningMode.ACTIVE      -> "Active Listening" to Passive
-            ListeningMode.PASSIVE     -> "Passive Monitoring" to YellowTorchDim
-            ListeningMode.DEACTIVATED -> "Voice Control Off" to Color.White.copy(alpha = 0.4f)
+            ListeningMode.ACTIVE      -> "Active Listening"    to Passive
+            ListeningMode.PASSIVE     -> "Passive Monitoring"  to YellowTorchDim
+            ListeningMode.DEACTIVATED -> "Voice Control Off"   to Color.White.copy(alpha = 0.4f)
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
@@ -417,24 +424,14 @@ private fun StatusLabel(uiState: FlashlightService.UiState) {
                 modifier = Modifier.size(16.dp)
             )
             Spacer(Modifier.width(6.dp))
-            Text(
-                text = micLabel,
-                color = micColor,
-                style = MaterialTheme.typography.labelLarge
-            )
+            Text(text = micLabel, color = micColor, style = MaterialTheme.typography.labelLarge)
         }
     }
 }
 
 @Composable
-private fun ModeSelector(
-    currentMode: ListeningMode,
-    onSetMode: (ListeningMode) -> Unit
-) {
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
+private fun ModeSelector(currentMode: ListeningMode, onSetMode: (ListeningMode) -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
             text = "LISTENING MODE",
             color = Color.White.copy(alpha = 0.5f),
@@ -449,9 +446,7 @@ private fun ModeSelector(
             colors = CardDefaults.cardColors(containerColor = CardSurface)
         ) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(6.dp),
+                modifier = Modifier.fillMaxWidth().padding(6.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 ModeTab(
@@ -484,12 +479,9 @@ private fun ModeSelector(
         Spacer(Modifier.height(10.dp))
 
         val hint = when (currentMode) {
-            ListeningMode.ACTIVE  ->
-                "Say \"turn on\", \"turn off\", or \"shut down\""
-            ListeningMode.PASSIVE ->
-                "Wakes on sound — then checks for commands"
-            ListeningMode.DEACTIVATED ->
-                "Microphone is fully released"
+            ListeningMode.ACTIVE      -> "Say your trigger words to control the flashlight"
+            ListeningMode.PASSIVE     -> "Wakes on sound — then checks for commands"
+            ListeningMode.DEACTIVATED -> "Microphone is fully released"
         }
         Text(
             text = hint,
@@ -510,16 +502,8 @@ private fun ModeTab(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val bgColor by animateColorAsState(
-        targetValue = if (selected) selectedColor else Color.Transparent,
-        animationSpec = tween(300),
-        label = "tabBg"
-    )
-    val textColor by animateColorAsState(
-        targetValue = if (selected) DeepCharcoal else Color.White.copy(alpha = 0.55f),
-        animationSpec = tween(300),
-        label = "tabText"
-    )
+    val bgColor   by animateColorAsState(if (selected) selectedColor else Color.Transparent, tween(300), label = "tabBg")
+    val textColor by animateColorAsState(if (selected) DeepCharcoal else Color.White.copy(alpha = 0.55f), tween(300), label = "tabText")
 
     Surface(
         onClick = onClick,
@@ -528,21 +512,9 @@ private fun ModeTab(
         color = bgColor,
         contentColor = textColor
     ) {
-        Column(
-            modifier = Modifier.padding(vertical = 12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                text = label,
-                fontWeight = FontWeight.Bold,
-                fontSize = 14.sp,
-                color = textColor
-            )
-            Text(
-                text = description,
-                fontSize = 10.sp,
-                color = textColor.copy(alpha = 0.75f)
-            )
+        Column(modifier = Modifier.padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(text = label, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = textColor)
+            Text(text = description, fontSize = 10.sp, color = textColor.copy(alpha = 0.75f))
         }
     }
 }
@@ -555,12 +527,8 @@ private fun ShutdownButton(onClick: () -> Unit) {
         AlertDialog(
             onDismissRequest = { showConfirm = false },
             containerColor = SurfaceCharcoal,
-            icon = {
-                Icon(Icons.Default.PowerOff, contentDescription = null, tint = OffRed)
-            },
-            title = {
-                Text("Shut Down?", color = Color.White, fontWeight = FontWeight.Bold)
-            },
+            icon = { Icon(Icons.Default.PowerOff, contentDescription = null, tint = OffRed) },
+            title = { Text("Shut Down?", color = Color.White, fontWeight = FontWeight.Bold) },
             text = {
                 Text(
                     "This will stop the background service, release the microphone, " +

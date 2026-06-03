@@ -1,0 +1,35 @@
+name: Unzip Project Files
+on:
+  push:
+    paths:
+      - '**.zip'
+
+# This section fixes the Exit Code 128 (Permission Denied)
+permissions:
+  contents: write
+
+jobs:
+  unzip_job:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true # Solves the Node.js warning
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetches all history so it can push back
+
+      - name: Unzip file
+        run: |
+          # Use -o to overwrite and -q to stay quiet (cleaner logs)
+          unzip -o android-flashlight-app.zip -d ./ 
+          rm android-flashlight-app.zip
+
+      - name: Commit and Push
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          # The '|| true' prevents error if there are no changes to commit
+          git commit -m "Auto-unzipped" || true
+          git push

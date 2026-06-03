@@ -5,6 +5,9 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -27,17 +30,19 @@ jobs:
             "build-tools;35.0.0" \
             "platform-tools"
 
-      - name: Download Gradle 8.7 directly
+      - name: Create local.properties
+        working-directory: android-flashlight-app
+        run: echo "sdk.dir=$ANDROID_HOME" > local.properties
+
+      - name: Download Gradle 8.7 & generate wrapper
         run: |
           wget -q https://services.gradle.org/distributions/gradle-8.7-bin.zip -O /tmp/gradle.zip
           unzip -q /tmp/gradle.zip -d /tmp/gradle-dist
-          echo "GRADLE=/tmp/gradle-dist/gradle-8.7/bin/gradle" >> $GITHUB_ENV
-
-      - name: Generate Gradle wrapper inside project
-        working-directory: android-flashlight-app
-        run: |
-          $GRADLE wrapper --gradle-version 8.7 --distribution-type bin
-          chmod +x gradlew
+          /tmp/gradle-dist/gradle-8.7/bin/gradle wrapper \
+            --project-dir android-flashlight-app \
+            --gradle-version 8.7 \
+            --distribution-type bin
+          chmod +x android-flashlight-app/gradlew
 
       - name: Cache Gradle packages
         uses: actions/cache@v4

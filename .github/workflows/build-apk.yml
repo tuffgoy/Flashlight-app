@@ -13,34 +13,43 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Extract Android project archive
+      - name: Auto-Detect and Extract Android Project
         run: |
-          # Ensure a clean target directory exists
+          # Create the clean target directory
           rm -rf android-flashlight-app
           mkdir -p android-flashlight-app
 
-          if [ -f android-flashlight-app.tar.gz ]; then
-            echo "Found tar.gz — extracting..."
-            tar -xzf android-flashlight-app.tar.gz -C android-flashlight-app --strip-components=1 || tar -xzf android-flashlight-app.tar.gz -C android-flashlight-app
-          elif [ -f android-flashlight-app.zip ]; then
-            echo "Found zip — extracting..."
-            unzip -o android-flashlight-app.zip -d android-flashlight-app
-            # If unzipping created a double nested folder inside, flatten it
+          # Search for ANY zip file in the workspace
+          ZIP_FILE=$(find . -maxdepth 2 -iname "*.zip" | head -n 1)
+          # Search for ANY tar.gz file in the workspace
+          TAR_FILE=$(find . -maxdepth 2 -iname "*.tar.gz" -o -iname "*.tar" | head -n 1)
+
+          if [ -n "$TAR_FILE" ]; then
+            echo "Auto-detected archive: $TAR_FILE"
+            tar -xf "$TAR_FILE" -C android-flashlight-app --strip-components=1 2>/dev/null || tar -xf "$TAR_FILE" -C android-flashlight-app
+          elif [ -n "$ZIP_FILE" ]; then
+            echo "Auto-detected archive: $ZIP_FILE"
+            unzip -o "$ZIP_FILE" -d android-flashlight-app
+            
+            # If zipped folder double-nested itself, flatten it out
             if [ -d android-flashlight-app/android-flashlight-app ]; then
               mv android-flashlight-app/android-flashlight-app/* android-flashlight-app/ 2>/dev/null || true
               mv android-flashlight-app/android-flashlight-app/.* android-flashlight-app/ 2>/dev/null || true
             fi
           else
-            echo "CRITICAL: No archive found in the root directory!"
+            echo "=== LOGGING WORKSPACE ROOT FILES TO HELP DEBUG ==="
+            ls -R
+            echo "================================================="
+            echo "CRITICAL ERROR: No zip or tar.gz archive found anywhere in the repository root!"
             exit 1
           fi
 
-          # Debug check: verify if gradlew exists in the target directory
+          # Emergency fix: if files extracted, but gradlew isn't where we expect it
           if [ ! -f android-flashlight-app/gradlew ]; then
-            echo "Searching for misplaced gradlew..."
-            REAL_DIR=$(find . -name "gradlew" -exec dirname {} \; | head -n 1)
-            if [ -n "$REAL_DIR" ] && [ "$REAL_DIR" != "./android-flashlight-app" ]; then
-              echo "Moving project files from $REAL_DIR to android-flashlight-app"
+            echo "Locating misplaced gradlew..."
+            REAL_DIR=$(find . -name "gradlew" -exec dirname {} \; | grep -v "android-flashlight-app" | head -n 1)
+            if [ -n "$REAL_DIR" ]; then
+              echo "Relocating project files from $REAL_DIR directly into android-flashlight-app"
               cp -r $REAL_DIR/* android-flashlight-app/ 2>/dev/null || true
               cp -r $REAL_DIR/.* android-flashlight-app/ 2>/dev/null || true
             fi
@@ -54,7 +63,13 @@ jobs:
 
       - name: Make Gradle wrapper executable
         working-directory: android-flashlight-app
-        run: chmod +x gradlew
+        run: |
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+          else
+            echo "CRITICAL ERROR: gradlew file still could not be found anywhere in the extracted directory tree."
+            exit 1
+          fi
 
       - name: Cache Gradle
         uses: actions/cache@v4

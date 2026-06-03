@@ -1,0 +1,32 @@
+workflows:
+  android-debug-build:
+    name: Flashlight App - Debug APK
+    max_build_duration: 30
+    environment:
+      java: 17
+    cache:
+      cache_paths:
+        - ~/.gradle/caches
+        - ~/.gradle/wrapper
+    scripts:
+      - name: Set SDK path
+        script: echo "sdk.dir=$ANDROID_SDK_ROOT" > android-flashlight-app/local.properties
+
+      - name: Make gradlew executable
+        script: chmod +x android-flashlight-app/gradlew
+
+      - name: Build debug APK
+        script: |
+          cd android-flashlight-app
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+    artifacts:
+      - android-flashlight-app/app/build/outputs/apk/debug/app-debug.apk
+
+    publishing:
+      email:
+        recipients:
+          - your@email.com
+        notify:
+          success: true
+          failure: true

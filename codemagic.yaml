@@ -25,10 +25,20 @@ workflows:
       - name: Build debug APK
         script: |
           cd android-flashlight-app
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          set +e
+          ./gradlew assembleDebug --no-daemon 2>&1 | tee /tmp/build_full.log
+          BUILD_EXIT=${PIPESTATUS[0]}
+          set -e
+          echo ""
+          echo "========== KOTLIN / COMPILER ERRORS =========="
+          grep -E "^e: |error:|Error:" /tmp/build_full.log | grep -v "^e: file" | head -30 || echo "No error lines matched"
+          echo "==============================================="
+          cp /tmp/build_full.log build.log
+          exit $BUILD_EXIT
 
     artifacts:
       - android-flashlight-app/app/build/outputs/apk/debug/app-debug.apk
+      - android-flashlight-app/build.log
 
     publishing:
       email:

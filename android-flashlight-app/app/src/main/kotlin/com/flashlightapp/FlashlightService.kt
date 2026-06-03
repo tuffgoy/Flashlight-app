@@ -18,11 +18,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /**
- * Persistent foreground service that owns the [FlashlightManager] and
- * [SpeechManager] so both can operate while the app is backgrounded.
+ * Persistent foreground service that owns [FlashlightManager] and [SpeechManager]
+ * so both can operate while the app is backgrounded.
  *
- * Clients (i.e. [MainActivity]) bind to this service via [LocalBinder] and
- * observe [uiState] to keep the UI in sync.
+ * Clients bind via [LocalBinder] and observe [uiState] to keep the UI in sync.
+ * Call [updateSettings] whenever the user saves new trigger / language preferences.
  */
 class FlashlightService : Service() {
 
@@ -31,7 +31,6 @@ class FlashlightService : Service() {
     }
 
     private val binder = LocalBinder()
-
     override fun onBind(intent: Intent?): IBinder = binder
 
     data class UiState(
@@ -47,23 +46,24 @@ class FlashlightService : Service() {
 
     private lateinit var flashlightManager: FlashlightManager
     private lateinit var speechManager: SpeechManager
+    private lateinit var repository: TriggerRepository
     private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "Service created")
         createNotificationChannel()
+        repository = TriggerRepository(this)
         flashlightManager = FlashlightManager(this)
-        speechManager = SpeechManager(this, ::handleVoiceCommand)
+        speechManager = SpeechManager(this, ::handleVoiceCommand).also {
+            it.updateSettings(repository.loadSettings())
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_STOP -> {
-                Log.d(TAG, "Stop action received via notification")
-                shutdown()
-                return START_NOT_STICKY
-            }
+        if (intent?.action == ACTION_STOP) {
+            Log.d(TAG, "Stop action received via notification")
+            shutdown(); return START_NOT_STICKY
         }
         Log.d(TAG, "Service started")
         acquireWakeLock()
@@ -90,10 +90,9 @@ class FlashlightService : Service() {
 
     fun setListeningMode(mode: ListeningMode) {
         if (_uiState.value.mode == mode) return
-        Log.d(TAG, "Mode change → $mode")
         val speechMode = when (mode) {
-            ListeningMode.ACTIVE -> SpeechManager.Mode.ACTIVE
-            ListeningMode.PASSIVE -> SpeechManager.Mode.PASSIVE
+            ListeningMode.ACTIVE      -> SpeechManager.Mode.ACTIVE
+            ListeningMode.PASSIVE     -> SpeechManager.Mode.PASSIVE
             ListeningMode.DEACTIVATED -> SpeechManager.Mode.STOPPED
         }
         speechManager.start(speechMode)
@@ -104,6 +103,12 @@ class FlashlightService : Service() {
     fun setFlashlight(on: Boolean) {
         flashlightManager.setTorch(on)
         _uiState.value = _uiState.value.copy(flashlightOn = on)
+    }
+
+    fun updateSettings(settings: AppSettings) {
+        repository.saveSettings(settings)
+        speechManager.updateSettings(settings)
+        Log.d(TAG, "Settings applied — language=${settings.language}")
     }
 
     fun shutdown() {
@@ -121,9 +126,9 @@ class FlashlightService : Service() {
     }
 
     private fun handleVoiceCommand(command: VoiceCommand) {
-        Log.i(TAG, "Handling command: $command")
+        Log.i(TAG, "Voice command: $command")
         when (command) {
-            VoiceCommand.TURN_ON -> setFlashlight(true)
+            VoiceCommand.TURN_ON  -> setFlashlight(true)
             VoiceCommand.TURN_OFF -> setFlashlight(false)
             VoiceCommand.SHUTDOWN -> shutdown()
         }
@@ -134,40 +139,32 @@ class FlashlightService : Service() {
             CHANNEL_ID,
             getString(R.string.notification_channel_name),
             NotificationManager.IMPORTANCE_LOW
-        ).apply {
-            description = "Flashlight voice control service"
-            setShowBadge(false)
-        }
-        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.createNotificationChannel(channel)
+        ).apply { description = "Flashlight voice control service"; setShowBadge(false) }
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+            .createNotificationChannel(channel)
     }
 
     private fun buildNotification(mode: ListeningMode): Notification {
-        val openAppIntent = PendingIntent.getActivity(
+        val openIntent = PendingIntent.getActivity(
             this, 0,
-            Intent(this, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
-            },
+            Intent(this, MainActivity::class.java).apply { flags = Intent.FLAG_ACTIVITY_SINGLE_TOP },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-
         val stopIntent = PendingIntent.getService(
             this, 1,
             Intent(this, FlashlightService::class.java).apply { action = ACTION_STOP },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-
-        val contentText = when (mode) {
-            ListeningMode.ACTIVE -> getString(R.string.notification_text_active)
-            ListeningMode.PASSIVE -> getString(R.string.notification_text_passive)
-            ListeningMode.DEACTIVATED -> "Deactivated"
+        val text = when (mode) {
+            ListeningMode.ACTIVE      -> getString(R.string.notification_text_active)
+            ListeningMode.PASSIVE     -> getString(R.string.notification_text_passive)
+            ListeningMode.DEACTIVATED -> getString(R.string.notification_text_deactivated)
         }
-
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.notification_title))
-            .setContentText(contentText)
+            .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_menu_camera)
-            .setContentIntent(openAppIntent)
+            .setContentIntent(openIntent)
             .addAction(
                 android.R.drawable.ic_media_pause,
                 getString(R.string.notification_action_stop),
@@ -179,27 +176,24 @@ class FlashlightService : Service() {
     }
 
     private fun updateNotification(mode: ListeningMode) {
-        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(NOTIFICATION_ID, buildNotification(mode))
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+            .notify(NOTIFICATION_ID, buildNotification(mode))
     }
 
     private fun acquireWakeLock() {
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(
-            PowerManager.PARTIAL_WAKE_LOCK,
-            "FlashlightApp::ServiceWakeLock"
-        ).also { it.acquire(12 * 60 * 60 * 1000L) }
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "FlashlightApp::ServiceWakeLock")
+            .also { it.acquire(12 * 60 * 60 * 1000L) }
     }
 
     private fun releaseWakeLock() {
-        wakeLock?.let { if (it.isHeld) it.release() }
-        wakeLock = null
+        wakeLock?.let { if (it.isHeld) it.release() }; wakeLock = null
     }
 
     companion object {
-        private const val TAG = "FlashlightService"
-        private const val CHANNEL_ID = "flashlight_service_channel"
+        private const val TAG             = "FlashlightService"
+        private const val CHANNEL_ID      = "flashlight_service_channel"
         private const val NOTIFICATION_ID = 1001
-        const val ACTION_STOP = "com.flashlightapp.ACTION_STOP"
+        const val ACTION_STOP             = "com.flashlightapp.ACTION_STOP"
     }
 }

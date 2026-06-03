@@ -276,11 +276,14 @@ class SpeechManager(
             t.isNotBlank() && recognized.contains(t)
         }
         TriggerType.VOICE -> {
-            val ref = trigger.referencePhrase.lowercase(Locale.ROOT).trim()
-            if (ref.isBlank()) return false
-            val sim = jaroWinkler(recognized, ref).toFloat()
-            Log.d(TAG, "Voice sim '$recognized' vs '$ref' = ${"%.0f".format(sim * 100)}%")
-            sim >= trigger.similarityThreshold
+    val ref = trigger.referencePhrase.lowercase(Locale.ROOT).trim()
+    if (ref.isBlank()) {
+        false
+    } else {
+        val sim = jaroWinkler(recognized, ref).toFloat()
+        Log.d(TAG, "Voice sim '$recognized' vs '$ref' = ${"%.0f".format(sim * 100)}%")
+        sim >= trigger.similarityThreshold
+     }
         }
     }
 

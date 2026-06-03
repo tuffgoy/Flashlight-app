@@ -12,8 +12,15 @@ workflows:
       - name: Set SDK path
         script: echo "sdk.dir=$ANDROID_SDK_ROOT" > android-flashlight-app/local.properties
 
-      - name: Make gradlew executable
-        script: chmod +x android-flashlight-app/gradlew
+      - name: Generate Gradle wrapper
+        script: |
+          curl -s -L https://services.gradle.org/distributions/gradle-8.7-bin.zip -o /tmp/gradle.zip
+          unzip -q /tmp/gradle.zip -d /tmp/gradle-dist
+          /tmp/gradle-dist/gradle-8.7/bin/gradle wrapper \
+            --project-dir android-flashlight-app \
+            --gradle-version 8.7 \
+            --distribution-type bin
+          chmod +x android-flashlight-app/gradlew
 
       - name: Build debug APK
         script: |
@@ -26,7 +33,7 @@ workflows:
     publishing:
       email:
         recipients:
-          - your@email.com
+          - mortar6767@outlook.com
         notify:
           success: true
           failure: true

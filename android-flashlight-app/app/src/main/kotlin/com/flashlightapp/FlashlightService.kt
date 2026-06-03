@@ -7,12 +7,10 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.os.Binder
-import android.os.IBinder
-
 import android.content.pm.ServiceInfo
+import android.os.Binder
 import android.os.Build
-
+import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -28,10 +26,6 @@ import kotlinx.coroutines.flow.StateFlow
  */
 class FlashlightService : Service() {
 
-    // -------------------------------------------------------------------------
-    // Binder
-    // -------------------------------------------------------------------------
-
     inner class LocalBinder : Binder() {
         fun getService(): FlashlightService = this@FlashlightService
     }
@@ -39,10 +33,6 @@ class FlashlightService : Service() {
     private val binder = LocalBinder()
 
     override fun onBind(intent: Intent?): IBinder = binder
-
-    // -------------------------------------------------------------------------
-    // State (observable by the bound Activity)
-    // -------------------------------------------------------------------------
 
     data class UiState(
         val flashlightOn: Boolean = false,
@@ -55,17 +45,9 @@ class FlashlightService : Service() {
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> get() = _uiState
 
-    // -------------------------------------------------------------------------
-    // Resources
-    // -------------------------------------------------------------------------
-
     private lateinit var flashlightManager: FlashlightManager
     private lateinit var speechManager: SpeechManager
     private var wakeLock: PowerManager.WakeLock? = null
-
-    // -------------------------------------------------------------------------
-    // Lifecycle
-    // -------------------------------------------------------------------------
 
     override fun onCreate() {
         super.onCreate()
@@ -85,7 +67,15 @@ class FlashlightService : Service() {
         }
         Log.d(TAG, "Service started")
         acquireWakeLock()
-        startForeground(NOTIFICATION_ID, buildNotification(_uiState.value.mode))
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            startForeground(
+                NOTIFICATION_ID,
+                buildNotification(_uiState.value.mode),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, buildNotification(_uiState.value.mode))
+        }
         speechManager.start(SpeechManager.Mode.ACTIVE)
         return START_STICKY
     }
@@ -97,10 +87,6 @@ class FlashlightService : Service() {
         releaseWakeLock()
         super.onDestroy()
     }
-
-    // -------------------------------------------------------------------------
-    // Public control surface (called from Activity / ViewModel)
-    // -------------------------------------------------------------------------
 
     fun setListeningMode(mode: ListeningMode) {
         if (_uiState.value.mode == mode) return
@@ -134,10 +120,6 @@ class FlashlightService : Service() {
         stopSelf()
     }
 
-    // -------------------------------------------------------------------------
-    // Voice command handler
-    // -------------------------------------------------------------------------
-
     private fun handleVoiceCommand(command: VoiceCommand) {
         Log.i(TAG, "Handling command: $command")
         when (command) {
@@ -146,10 +128,6 @@ class FlashlightService : Service() {
             VoiceCommand.SHUTDOWN -> shutdown()
         }
     }
-
-    // -------------------------------------------------------------------------
-    // Notification
-    // -------------------------------------------------------------------------
 
     private fun createNotificationChannel() {
         val channel = NotificationChannel(
@@ -205,26 +183,18 @@ class FlashlightService : Service() {
         nm.notify(NOTIFICATION_ID, buildNotification(mode))
     }
 
-    // -------------------------------------------------------------------------
-    // Wake lock
-    // -------------------------------------------------------------------------
-
     private fun acquireWakeLock() {
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
         wakeLock = pm.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK,
             "FlashlightApp::ServiceWakeLock"
-        ).also { it.acquire(12 * 60 * 60 * 1000L) } // max 12 h
+        ).also { it.acquire(12 * 60 * 60 * 1000L) }
     }
 
     private fun releaseWakeLock() {
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
     }
-
-    // -------------------------------------------------------------------------
-    // Constants
-    // -------------------------------------------------------------------------
 
     companion object {
         private const val TAG = "FlashlightService"

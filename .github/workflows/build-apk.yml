@@ -13,51 +13,40 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Multi-Layer Archive Extraction
+      - name: Target and Extract ZIP Project
         run: |
-          echo "=== 1. DIAGNOSING INITIAL REPOSITORY LAYOUT ==="
-          ls -la
-          echo "=============================================="
+          echo "=== 1. VERIFYING ZIP EXISTENCE ==="
+          if [ ! -f android-flashlight-app.zip ]; then
+            echo "CRITICAL ERROR: android-flashlight-app.zip was not found in the root directory!"
+            ls -la
+            exit 1
+          fi
 
-          # Create a clean destination folder
+          # Clean target build directory
           rm -rf android-flashlight-app
           mkdir -p android-flashlight-app
 
-          # Step A: Find and extract any outer archive (.tar.gz or .zip)
-          OUTER_ARCHIVE=$(find . -maxdepth 2 -type f \( -name "*.tar.gz" -o -name "*.tgz" -o -name "*.zip" \) | head -n 1)
-          
-          if [ -n "$OUTER_ARCHIVE" ]; then
-            echo "Found outer archive at: $OUTER_ARCHIVE"
-            if [[ "$OUTER_ARCHIVE" == *.zip ]]; then
-              unzip -o "$OUTER_ARCHIVE" -d android-flashlight-app
-            else
-              tar -xzf "$OUTER_ARCHIVE" -C android-flashlight-app
-            fi
-          else
-            echo "No outer compressed archive found. Checking for a raw tar or pre-extracted files..."
+          echo "=== 2. EXTRACTING ARCHIVE ==="
+          unzip -o android-flashlight-app.zip -d android-flashlight-app
+
+          echo "=== 3. FIXING DOUBLE-NESTED DIRECTORIES ==="
+          # If the zip created a folder inside a folder, move everything up one level
+          if [ -d android-flashlight-app/android-flashlight-app ]; then
+            echo "Detected double-nested folder layout. Flattening workspace..."
+            mv android-flashlight-app/android-flashlight-app/* android-flashlight-app/ 2>/dev/null || true
+            mv android-flashlight-app/android-flashlight-app/.* android-flashlight-app/ 2>/dev/null || true
           fi
 
-          # Step B: Check for an inner nested .tar file (Handles the exact .tar.gz/.tar combination)
-          INNER_TAR=$(find . -name "*.tar" | head -n 1)
-          if [ -n "$INNER_TAR" ]; then
-            echo "Detected nested inner archive: $INNER_TAR"
-            tar -xf "$INNER_TAR" -C android-flashlight-app
+          # Second failsafe: Find where gradlew actually lives and pull everything there
+          REAL_ROOT=$(find . -name "gradlew" -exec dirname {} \; | grep -v "android-flashlight-app$" | head -n 1)
+          if [ -n "$REAL_ROOT" ] && [ "$REAL_ROOT" != "." ]; then
+            echo "Relocating project roots from misplaced directory: $REAL_ROOT"
+            cp -r $REAL_ROOT/* android-flashlight-app/ 2>/dev/null || true
+            cp -r $REAL_ROOT/.* android-flashlight-app/ 2>/dev/null || true
           fi
 
-          echo "=== 2. POSITIONING GRADLE TRACKER ==="
-          # Locate where 'gradlew' actually landed within the nested directory trees
-          REAL_GRADLE_DIR=$(find . -name "gradlew" -exec dirname {} \; | grep -v "android-flashlight-app$" | head -n 1)
-          
-          if [ -n "$REAL_GRADLE_DIR" ]; then
-            echo "Found genuine Android root project inside: $REAL_GRADLE_DIR"
-            # Move everything from that mystery folder into our standard compile directory
-            cp -r $REAL_GRADLE_DIR/* android-flashlight-app/ 2>/dev/null || true
-            cp -r $REAL_GRADLE_DIR/.* android-flashlight-app/ 2>/dev/null || true
-          fi
-
-          echo "=== 3. POST-EXTRACTION VERIFICATION ==="
+          echo "=== 4. FINAL WORKSPACE VERIFICATION ==="
           ls -la android-flashlight-app
-          echo "========================================"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -70,11 +59,11 @@ jobs:
           if [ -f android-flashlight-app/gradlew ]; then
             chmod +x android-flashlight-app/gradlew
           else
-            echo "CRITICAL STATE ERROR: No gradlew script found anywhere. Verify your repository has the correct archive file."
+            echo "CRITICAL ERROR: gradlew script missing from extracted ZIP files."
             exit 1
           fi
 
-      - name: Cache Gradle
+      - name: Cache Gradle Build States
         uses: actions/cache@v4
         with:
           path: |
@@ -83,11 +72,11 @@ jobs:
           key: gradle-${{ hashFiles('android-flashlight-app/**/*.gradle*', 'android-flashlight-app/gradle/libs.versions.toml') }}
           restore-keys: gradle-
 
-      - name: Build debug APK
+      - name: Build Debug APK
         working-directory: android-flashlight-app
         run: ./gradlew assembleDebug --no-daemon
 
-      - name: Upload APK
+      - name: Upload Finished APK
         uses: actions/upload-artifact@v4
         with:
           name: FlashlightVoice-debug

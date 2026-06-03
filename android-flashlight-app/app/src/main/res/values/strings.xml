@@ -1,5 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<string name="notification_text_deactivated">Flashlight control deactivated</string>
 <resources>
     <string name="app_name">Flashlight Voice</string>
     <string name="notification_channel_id">flashlight_service_channel</string>
@@ -7,5 +6,6 @@
     <string name="notification_title">Flashlight Voice Control</string>
     <string name="notification_text_active">Actively listening for voice commands…</string>
     <string name="notification_text_passive">Passive monitoring — waiting for sound…</string>
+    <string name="notification_text_deactivated">Flashlight control deactivated</string>
     <string name="notification_action_stop">Stop Service</string>
 </resources>

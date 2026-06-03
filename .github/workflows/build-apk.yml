@@ -13,27 +13,181 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Auto-Detect and Extract Android Project
+      - name: Multi-Layer Archive Extraction
         run: |
-          # Create the clean target directory
+          echo "=== 1. DIAGNOSING INITIAL REPOSITORY LAYOUT ==="
+          ls -la
+          echo "=============================================="
+
+          # Create a clean destination folder
           rm -rf android-flashlight-app
           mkdir -p android-flashlight-app
 
-          # Search for ANY zip file in the workspace
-          ZIP_FILE=$(find . -maxdepth 2 -iname "*.zip" | head -n 1)
-          # Search for ANY tar.gz file in the workspace
-          TAR_FILE=$(find . -maxdepth 2 -iname "*.tar.gz" -o -iname "*.tar" | head -n 1)
+          # Step A: Find and extract any outer archive (.tar.gz or .zip)
+          OUTER_ARCHIVE=$(find . -maxdepth 2 -type f \( -name "*.tar.gz" -o -name "*.tgz" -o -name "*.zip" \) | head -n 1)
+          
+          if [ -n "$OUTER_ARCHIVE" ]; then
+            echo "Found outer archive at: $OUTER_ARCHIVE"
+            if [[ "$OUTER_ARCHIVE" == *.zip ]]; then
+              unzip -o "$OUTER_ARCHIVE" -d android-flashlight-app
+            else
+              tar -xzf "$OUTER_ARCHIVE" -C android-flashlight-app
+            fi
+          else
+            echo "No outer compressed archive found. Checking for a raw tar or pre-extracted files..."
+          fi
 
-          if [ -n "$TAR_FILE" ]; then
-            echo "Auto-detected archive: $TAR_FILE"
-            tar -xf "$TAR_FILE" -C android-flashlight-app --strip-components=1 2>/dev/null || tar -xf "$TAR_FILE" -C android-flashlight-app
-          elif [ -n "$ZIP_FILE" ]; then
-            echo "Auto-detected archive: $ZIP_FILE"
-            unzip -o "$ZIP_FILE" -d android-flashlight-app
-            
-            # If zipped folder double-nested itself, flatten it out
-            if [ -d android-flashlight-app/android-flashlight-app ]; then
-              mv android-flashlight-app/android-flashlight-app/* android-flashlight-app/ 2>/dev/null || true
+          # Step B: Check for an inner nested .tar file (Handles the exact .tar.gz/.tar combination)
+          INNER_TAR=$(find . -name "*.tar" | head -n 1)
+          if [ -n "$INNER_TAR" ]; then
+            echo "Detected nested inner archive: $INNER_TAR"
+            tar -xf "$INNER_TAR" -C android-flashlight-app
+          fi
+
+          echo "=== 2. POSITIONING GRADLE TRACKER ==="
+          # Locate where 'gradlew' actually landed within the nested directory trees
+          REAL_GRADLE_DIR=$(find . -name "gradlew" -exec dirname {} \; | grep -v "android-flashlight-app$" | head -n 1)
+          
+          if [ -n "$REAL_GRADLE_DIR" ]; then
+            echo "Found genuine Android root project inside: $REAL_GRADLE_DIR"
+            # Move everything from that mystery folder into our standard compile directory
+            cp -r $REAL_GRADLE_DIR/* android-flashlight-app/ 2>/dev/null || true
+            cp -r $REAL_GRADLE_DIR/.* android-flashlight-app/ 2>/dev/null || true
+          fi
+
+          echo "=== 3. POST-EXTRACTION VERIFICATION ==="
+          ls -la android-flashlight-app
+          echo "========================================"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Make Gradle wrapper executable
+        run: |
+          if [ -f android-flashlight-app/gradlew ]; then
+            chmod +x android-flashlight-app/gradlew
+          else
+            echo "CRITICAL STATE ERROR: No gradlew script found anywhere. Verify your repository has the correct archive file."
+            exit 1
+          fi
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('android-flashlight-app/**/*.gradle*', 'android-flashlight-app/gradle/libs.versions.toml') }}
+          restore-keys: gradle-
+
+      - name: Build debug APK
+        working-directory: android-flashlight-app
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlashlightVoice-debug
+          path: android-flashlight-app/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7
+name: Build APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Multi-Layer Archive Extraction
+        run: |
+          echo "=== 1. DIAGNOSING INITIAL REPOSITORY LAYOUT ==="
+          ls -la
+          echo "=============================================="
+
+          # Create a clean destination folder
+          rm -rf android-flashlight-app
+          mkdir -p android-flashlight-app
+
+          # Step A: Find and extract any outer archive (.tar.gz or .zip)
+          OUTER_ARCHIVE=$(find . -maxdepth 2 -type f \( -name "*.tar.gz" -o -name "*.tgz" -o -name "*.zip" \) | head -n 1)
+          
+          if [ -n "$OUTER_ARCHIVE" ]; then
+            echo "Found outer archive at: $OUTER_ARCHIVE"
+            if [[ "$OUTER_ARCHIVE" == *.zip ]]; then
+              unzip -o "$OUTER_ARCHIVE" -d android-flashlight-app
+            else
+              tar -xzf "$OUTER_ARCHIVE" -C android-flashlight-app
+            fi
+          else
+            echo "No outer compressed archive found. Checking for a raw tar or pre-extracted files..."
+          fi
+
+          # Step B: Check for an inner nested .tar file (Handles the exact .tar.gz/.tar combination)
+          INNER_TAR=$(find . -name "*.tar" | head -n 1)
+          if [ -n "$INNER_TAR" ]; then
+            echo "Detected nested inner archive: $INNER_TAR"
+            tar -xf "$INNER_TAR" -C android-flashlight-app
+          fi
+
+          echo "=== 2. POSITIONING GRADLE TRACKER ==="
+          # Locate where 'gradlew' actually landed within the nested directory trees
+          REAL_GRADLE_DIR=$(find . -name "gradlew" -exec dirname {} \; | grep -v "android-flashlight-app$" | head -n 1)
+          
+          if [ -n "$REAL_GRADLE_DIR" ]; then
+            echo "Found genuine Android root project inside: $REAL_GRADLE_DIR"
+            # Move everything from that mystery folder into our standard compile directory
+            cp -r $REAL_GRADLE_DIR/* android-flashlight-app/ 2>/dev/null || true
+            cp -r $REAL_GRADLE_DIR/.* android-flashlight-app/ 2>/dev/null || true
+          fi
+
+          echo "=== 3. POST-EXTRACTION VERIFICATION ==="
+          ls -la android-flashlight-app
+          echo "========================================"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Make Gradle wrapper executable
+        run: |
+          if [ -f android-flashlight-app/gradlew ]; then
+            chmod +x android-flashlight-app/gradlew
+          else
+            echo "CRITICAL STATE ERROR: No gradlew script found anywhere. Verify your repository has the correct archive file."
+            exit 1
+          fi
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('android-flashlight-app/**/*.gradle*', 'android-flashlight-app/gradle/libs.versions.toml') }}
+          restore-keys: gradle-
+
+      - name: Build debug APK
+        working-directory: android-flashlight-app
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlashlightVoice-debug
+          path: android-flashlight-app/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7
               mv android-flashlight-app/android-flashlight-app/.* android-flashlight-app/ 2>/dev/null || true
             fi
           else
